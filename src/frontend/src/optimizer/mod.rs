@@ -150,6 +150,13 @@ impl PlanRoot {
             heuristic_optimizer.optimize(plan)
         };
 
+        // // Generate delta join plans if indicies are available
+        // plan = {
+        //     let rules = vec![IndexDeltaJoinRule::create()];
+        //     let heuristic_optimizer = HeuristicOptimizer::new(ApplyOrder::TopDown, rules);
+        //     heuristic_optimizer.optimize(plan)
+        // };
+
         // Reorder multijoin into left-deep join tree.
         // Apply limited set of filter pushdown rules again since we pullup non eq-join
         // conditions into a filter above the multijoin.
@@ -235,8 +242,9 @@ impl PlanRoot {
         }?;
 
         // Rewrite joins with index to delta join
+        // TODO: remove this after the full migration
         let plan = {
-            let rules = vec![IndexDeltaJoinRule::create()];
+            let rules = vec![IndexDeltaJoinRuleLegacy::create()];
             let heuristic_optimizer = HeuristicOptimizer::new(ApplyOrder::BottomUp, rules);
             heuristic_optimizer.optimize(plan)
         };
