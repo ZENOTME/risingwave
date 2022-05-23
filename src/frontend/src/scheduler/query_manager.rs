@@ -29,6 +29,7 @@ use crate::scheduler::execution::QueryExecution;
 use crate::scheduler::plan_fragmenter::Query;
 use crate::scheduler::worker_node_manager::WorkerNodeManagerRef;
 use crate::scheduler::ExecutionContextRef;
+use crate::COMPUTE_CLIENT_POOL;
 
 pub trait DataChunkStream = Stream<Item = Result<DataChunk>>;
 
@@ -68,7 +69,9 @@ impl QueryManager {
         plan: BatchPlanProst,
     ) -> Result<impl Stream<Item = Result<DataChunk>>> {
         let worker_node_addr = self.worker_node_manager.next_random()?.host.unwrap();
-        let compute_client: ComputeClient = ComputeClient::new((&worker_node_addr).into()).await?;
+        let compute_client = COMPUTE_CLIENT_POOL
+            .get_client_for_addr((&worker_node_addr).into())
+            .await?;
 
         // Build task id and task sink id
         let task_id = TaskId {
@@ -139,7 +142,9 @@ impl QueryResultFetcher {
             "Starting to run query result fetcher, task output id: {:?}, task_host: {:?}",
             self.task_output_id, self.task_host
         );
-        let compute_client: ComputeClient = ComputeClient::new((&self.task_host).into()).await?;
+        let compute_client = COMPUTE_CLIENT_POOL
+            .get_client_for_addr((&self.task_host).into())
+            .await?;
 
         let mut source = compute_client.get_data(self.task_output_id).await?;
         while let Some(chunk) = source.take_data().await? {

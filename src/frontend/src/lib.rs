@@ -59,6 +59,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use pgwire::pg_server::pg_serve;
+use risingwave_rpc_client::ComputeClientPool;
 use session::SessionManagerImpl;
 
 #[derive(Parser, Clone, Debug)]
@@ -93,4 +94,9 @@ impl Default for FrontendOpts {
 pub async fn start(opts: FrontendOpts) {
     let session_mgr = Arc::new(SessionManagerImpl::new(&opts).await.unwrap());
     pg_serve(&opts.host, session_mgr).await.unwrap();
+}
+
+lazy_static::lazy_static! {
+    /// A compute client pool
+    pub static ref COMPUTE_CLIENT_POOL: ComputeClientPool = ComputeClientPool::new(1024);
 }

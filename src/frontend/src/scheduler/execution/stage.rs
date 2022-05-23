@@ -39,6 +39,7 @@ use crate::scheduler::execution::stage::StageState::Pending;
 use crate::scheduler::execution::QueryMessage;
 use crate::scheduler::plan_fragmenter::{ExecutionPlanNode, QueryStageRef, StageId};
 use crate::scheduler::worker_node_manager::WorkerNodeManagerRef;
+use crate::COMPUTE_CLIENT_POOL;
 
 // Root stage always has only one task.
 pub const ROOT_TASK_ID: u32 = 0;
@@ -307,7 +308,9 @@ impl StageRunner {
 
     async fn schedule_task(&self, task_id: TaskIdProst, plan_fragment: PlanFragment) -> Result<()> {
         let worker_node = self.worker_node_manager.next_random()?;
-        let compute_client = ComputeClient::new(worker_node.host.as_ref().unwrap().into()).await?;
+        let compute_client = COMPUTE_CLIENT_POOL
+            .get_client_for_addr(worker_node.host.as_ref().unwrap().into())
+            .await?;
 
         let t_id = task_id.task_id;
         compute_client
