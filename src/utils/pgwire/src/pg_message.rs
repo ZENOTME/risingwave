@@ -17,10 +17,11 @@ use std::io::{Error, ErrorKind, IoSlice, Result, Write};
 
 use byteorder::{BigEndian, ByteOrder};
 /// Part of code learned from https://github.com/zenithdb/zenith/blob/main/zenith_utils/src/pq_proto.rs.
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::pg_field_descriptor::PgFieldDescriptor;
+use crate::pg_message::FeMessage::Bind;
 use crate::pg_response::StatementType;
 use crate::pg_server::BoxedError;
 use crate::types::Row;
@@ -30,6 +31,11 @@ pub enum FeMessage {
     Ssl,
     Startup(FeStartupMessage),
     Query(FeQueryMessage),
+    Describe(FeDescribeMessage),
+    Bind(FeBindMessage),
+    Sync,
+    Execute(FeExecuteMessage),
+    Parse(FeParseMessage),
     CancelQuery,
     Terminate,
 }
@@ -39,6 +45,112 @@ pub struct FeStartupMessage {}
 /// Query message contains the string sql.
 pub struct FeQueryMessage {
     pub sql_bytes: Bytes,
+}
+
+// we only support unnamed prepared stmt and portal
+#[derive(Debug)]
+pub struct FeBindMessage {}
+
+// we only support unnamed prepared stmt or portal
+#[derive(Debug)]
+pub struct FeExecuteMessage {
+    /// max # of rows
+    pub maxrows: i32,
+}
+
+// We only support the simple case of Parse on unnamed prepared statement and
+// no params
+#[derive(Debug)]
+pub struct FeParseMessage {
+    pub query_string: Bytes,
+}
+
+#[derive(Debug)]
+pub struct FeDescribeMessage {
+    pub kind: u8, /* 'S' to describe a prepared statement; or 'P' to describe a portal.
+                   * we only support unnamed prepared stmt or portal */
+}
+
+impl FeDescribeMessage {
+    pub fn parse(mut buf: Bytes) -> Result<FeMessage> {
+        let kind = buf.get_u8();
+        let _pstmt_name = read_null_terminated(&mut buf)?;
+        // FIXME: see FeParseMessage::parse
+        // if !pstmt_name.is_empty() {
+        // return Err(io::Error::new(
+        // io::ErrorKind::InvalidInput,
+        // "named prepared statements not implemented in Describe",
+        // ));
+        // }
+
+        if kind != b'S' {
+            panic!("only prepared statement Describe is implemented");
+        }
+
+        Ok(FeMessage::Describe(FeDescribeMessage { kind }))
+    }
+}
+
+impl FeBindMessage {
+    pub fn parse(mut buf: Bytes) -> Result<FeMessage> {
+        let portal_name = read_null_terminated(&mut buf)?;
+        let _pstmt_name = read_null_terminated(&mut buf)?;
+
+        if !portal_name.is_empty() {
+            unimplemented!("named portals not implemented");
+        }
+
+        // FIXME: see FeParseMessage::parse
+        // if !pstmt_name.is_empty() {
+        // return Err(io::Error::new(
+        // io::ErrorKind::InvalidInput,
+        // "named prepared statements not implemented",
+        // ));
+        // }
+
+        Ok(FeMessage::Bind(FeBindMessage {}))
+    }
+}
+
+impl FeExecuteMessage {
+    pub fn parse(mut buf: Bytes) -> Result<FeMessage> {
+        let portal_name = read_null_terminated(&mut buf)?;
+        let maxrows = buf.get_i32();
+
+        if !portal_name.is_empty() {
+            unimplemented!("named portals not implemented");
+        }
+
+        if maxrows != 0 {
+            unimplemented!("row limit in Execute message not supported");
+        }
+
+        Ok(FeMessage::Execute(FeExecuteMessage { maxrows }))
+    }
+}
+
+impl FeParseMessage {
+    pub fn parse(mut buf: Bytes) -> Result<FeMessage> {
+        let _pstmt_name = read_null_terminated(&mut buf)?;
+        let query_string = read_null_terminated(&mut buf)?;
+        let nparams = buf.get_i16();
+        // FIXME: the rust-postgres driver uses a named prepared statement
+        // for copy_out(). We're not prepared to handle that correctly. For
+        // now, just ignore the statement name, assuming that the client never
+        // uses more than one prepared statement at a time.
+        // if !pstmt_name.is_empty() {
+        // return Err(io::Error::new(
+        // io::ErrorKind::InvalidInput,
+        // "named prepared statements not implemented in Parse",
+        // ));
+        // }
+
+        if nparams != 0 {
+            unimplemented!("query params not implemented");
+        }
+
+        Ok(FeMessage::Parse(FeParseMessage { query_string }))
+    }
 }
 
 impl FeQueryMessage {
@@ -73,6 +185,11 @@ impl FeMessage {
 
         match val {
             b'Q' => Ok(FeMessage::Query(FeQueryMessage { sql_bytes })),
+            b'P' => FeParseMessage::parse(sql_bytes),
+            b'D' => FeDescribeMessage::parse(sql_bytes),
+            b'B' => FeBindMessage::parse(sql_bytes),
+            b'E' => FeExecuteMessage::parse(sql_bytes),
+            b'S' => Ok(FeMessage::Sync),
             b'X' => Ok(FeMessage::Terminate),
             _ => Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -109,6 +226,24 @@ impl FeStartupMessage {
     }
 }
 
+fn read_null_terminated(buf: &mut Bytes) -> Result<Bytes> {
+    let mut result = BytesMut::new();
+
+    loop {
+        if !buf.has_remaining() {
+            panic!("no null-terminator in string");
+        }
+
+        let byte = buf.get_u8();
+
+        if byte == 0 {
+            break;
+        }
+        result.put_u8(byte);
+    }
+    Ok(result.freeze())
+}
+
 /// Message sent from server to psql client. Implement `write` (how to serialize it into psql
 /// buffer).
 #[derive(Debug)]
@@ -118,6 +253,10 @@ pub enum BeMessage<'a> {
     // Single byte - used in response to SSLRequest/GSSENCRequest.
     EncryptionResponse,
     EmptyQueryResponse,
+    ParseComplete,
+    BindComplete,
+    ParameterDescription,
+    NoData,
     DataRow(&'a Row),
     ParameterStatus(BeParameterStatusMessage<'a>),
     ReadyForQuery,
@@ -285,6 +424,31 @@ impl<'a> BeMessage<'a> {
                 buf.put_i32(5);
                 // TODO: add transaction status
                 buf.put_u8(b'I');
+            }
+
+            BeMessage::ParseComplete => {
+                buf.put_u8(b'1');
+                write_body(buf, |_| Ok(()))?;
+            }
+
+            BeMessage::BindComplete => {
+                buf.put_u8(b'2');
+                write_body(buf, |_| Ok(()))?;
+            }
+
+            BeMessage::ParameterDescription => {
+                buf.put_u8(b't');
+                write_body(buf, |buf| {
+                    // we don't support params, so always 0
+                    buf.put_i16(0);
+                    Ok(())
+                })
+                .unwrap();
+            }
+
+            BeMessage::NoData => {
+                buf.put_u8(b'n');
+                write_body(buf, |_| Ok(())).unwrap();
             }
 
             BeMessage::EncryptionResponse => {
