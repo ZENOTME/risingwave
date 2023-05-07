@@ -65,6 +65,7 @@ tokio = { version = "0.2", package = "madsim-tokio", features = [
     "macros",
     "time",
     "signal",
+    "tracing"
 ] }
 tokio-retry = "0.3"
 tokio-stream = { version = "0.1", features = ["net"] }

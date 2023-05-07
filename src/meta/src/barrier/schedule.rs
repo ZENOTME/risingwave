@@ -16,12 +16,15 @@ use std::collections::VecDeque;
 use std::iter::once;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 use anyhow::anyhow;
 use risingwave_common::catalog::TableId;
 use risingwave_pb::hummock::HummockSnapshot;
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::{oneshot, watch, RwLock};
+use tokio::time::sleep;
+use tracing::Instrument;
 
 use super::notifier::Notifier;
 use super::{Command, Scheduled};
@@ -201,7 +204,7 @@ impl<S: MetaStore> BarrierScheduler<S> {
 
         for Context {
             collect_rx,
-            finish_rx,
+            mut finish_rx,
         } in contexts
         {
             // Throw the error if it occurs when collecting this barrier.
@@ -209,10 +212,30 @@ impl<S: MetaStore> BarrierScheduler<S> {
                 .await
                 .map_err(|e| anyhow!("failed to collect barrier: {}", e))??;
 
-            // Wait for this command to be finished.
-            finish_rx
-                .await
-                .map_err(|e| anyhow!("failed to finish command: {}", e))?;
+            let receive = async move {
+                loop {
+                    println!(">>>>>>> poll");
+                    match finish_rx.try_recv() {
+                        Ok(_) => {
+                            println!(">>>>>>>> Get!");
+                            return Ok(());
+                        },
+                        Err(TryRecvError::Empty) => {
+                            println!(">>>>>>>> Empty. Sleep");
+                            sleep(Duration::from_millis(500)).await;
+                        },
+                        _ => {
+                            return Err(anyhow!("failed to finish command: "));
+                        }
+                    }
+                }
+                // finish_rx
+                //.await.map_err(|e| anyhow!("failed to finish command: {}", e))
+            };
+
+            receive
+                .instrument(tracing::error_span!("my_future"))
+                .await?;
         }
 
         Ok(())

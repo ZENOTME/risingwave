@@ -567,6 +567,7 @@ where
         let mut min_interval = tokio::time::interval(interval);
         min_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let (barrier_complete_tx, mut barrier_complete_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (barrier_complete_tx_v2, mut barrier_complete_rx_v2) = tokio::sync::mpsc::unbounded_channel();
         let mut checkpoint_control = CheckpointControl::new(self.metrics.clone());
         let (local_notification_tx, mut local_notification_rx) =
             tokio::sync::mpsc::unbounded_channel();
@@ -590,6 +591,16 @@ where
                     self.handle_local_notification(notification.unwrap());
                 }
                 // Barrier completes.
+                completion = barrier_complete_rx_v2.recv() => {
+                    self.handle_barrier_complete(
+                        completion.unwrap(),
+                        &mut state,
+                        &mut checkpoint_control,
+                    )
+                    .await;
+                    println!(">>>> Schedule barrier complete!");
+                }
+                // Barrier completes.
                 completion = barrier_complete_rx.recv() => {
                     self.handle_barrier_complete(
                         completion.unwrap(),
@@ -602,7 +613,7 @@ where
                 // There's barrier scheduled.
                 _ = self.scheduled_barriers.wait_one(), if checkpoint_control.can_inject_barrier(self.in_flight_barrier_nums) => {
                     min_interval.reset(); // Reset the interval as we have a new barrier.
-                    self.handle_new_barrier(&barrier_complete_tx, &mut state, &mut checkpoint_control).await;
+                    self.handle_new_barrier(&barrier_complete_tx_v2, &mut state, &mut checkpoint_control).await;
                 }
                 // Minimum interval reached.
                 _ = min_interval.tick(), if checkpoint_control.can_inject_barrier(self.in_flight_barrier_nums) => {

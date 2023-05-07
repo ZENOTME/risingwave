@@ -159,6 +159,9 @@ pub fn init_risingwave_logger(settings: LoggerSettings) {
             .with_target("console_subscriber", Level::WARN)
             .with_target("reqwest", Level::WARN)
             .with_target("sled", Level::INFO);
+            //.with_target("runtime", Level::TRACE);
+            // .with_target("runtime.resource.async_op.poll", Level::TRACE)
+            // .with_target("runtime::resource::poll_op", Level::TRACE);
 
         let filter = configure_risingwave_targets_fmt(filter);
 
